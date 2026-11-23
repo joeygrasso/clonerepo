@@ -3,16 +3,17 @@
 # Clone repo helper with additional options
 set -eou pipefail
 
-VERSION="1.0.2"
+VERSION="1.0.3"
 
-cd "$(dirname "$0")/"
-dir_root=$(pwd)
+# Resolve the script's real location (follows symlinks) without changing the
+# caller's working directory, so relative paths like `-p .` behave as expected.
+dir_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-source ${dir_root}/bash_helpers
+source "${dir_root}/bash_helpers"
 
 usage() {
     cat <<EOF
-USAGE: clonerepo [options]
+USAGE: clonerepo -o <repo-owner> -n <repo-name> [options]
 This script will clone a repo, optionally add a remote called
 upstream, and optionally add an alias to ~/.repo-aliases.
 
@@ -36,7 +37,7 @@ EOF
 clone_repo() {
 
   log "cloning: ${FULL_CLONE_URL}"
-  if !(git clone ${FULL_CLONE_URL} ${CLONE_PATH}/${REPO_NAME}); then
+  if ! git clone "${FULL_CLONE_URL}" "${CLONE_PATH}/${REPO_NAME}"; then
     fail "could not clone ${REPO_NAME}"
     exit 1
   fi
@@ -48,10 +49,10 @@ add_remote() {
   log "Adding remote: ${REPO_REMOTE_OWNER}/${REPO_NAME}..."
 
   # Change from working directory into cloned repo
-  cd ${CLONE_PATH}/${REPO_NAME}
+  cd "${CLONE_PATH}/${REPO_NAME}"
 
-  if !(git remote add upstream ${FULL_CLONE_URL}); then
-    fail "could not add remote ${FULL_CLONE_URL}"
+  if ! git remote add upstream "${UPSTREAM_URL}"; then
+    fail "could not add remote ${UPSTREAM_URL}"
     exit 1
   fi
   success "Successfully added remote: ${REPO_REMOTE_OWNER}/${REPO_NAME}..."
@@ -64,13 +65,29 @@ add_remote() {
 add_repo_alias() {
   log "Adding ${REPO_NAME} alias..."
   echo "### ${REPO_NAME} alias added by $0 on $(date +%m-%d-%y)
-alias repo-${REPO_NAME}=\"cd ${CLONE_PATH}/${REPO_NAME}\"" >> ${HOME}/.repo-aliases
+alias repo-${REPO_NAME}=\"cd ${CLONE_PATH}/${REPO_NAME}\"" >> "${HOME}/.repo-aliases"
 
   success "Successfully added alias: repo-${REPO_NAME}..."
 }
 
 
+# Ensure a flag that takes a value was actually given one.
+# Usage: require_value <flag> <remaining arg count> [next arg]
+require_value() {
+  if [[ $2 -lt 2 || -z "${3:-}" || "${3:-}" == -* ]]; then
+    fail "Option $1 requires a value."
+    usage >&2
+    exit 1
+  fi
+}
+
 ### Main Execution:
+
+# Bare invocation: show usage instead of attempting a clone.
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 0
+fi
 
 # Check for git. Fail fast.
 check_installed git
@@ -97,20 +114,26 @@ while [ $# -gt 0 ]; do
     -k|--key)
       SSH=true;;
     -n|--repo-name)
+      require_value "$1" $# "${2:-}"
       REPO_NAME="$2"; shift;;
     -o|--repo-owner)
+      require_value "$1" $# "${2:-}"
       REPO_OWNER="$2"; shift;;
     -p|--clone-path)
+      require_value "$1" $# "${2:-}"
       CLONE_PATH="$2"; shift;;
     -r|--remote)
+      require_value "$1" $# "${2:-}"
       REPO_REMOTE_OWNER="$2"; shift;;
     -s|--source)
+      require_value "$1" $# "${2:-}"
       REPO_SOURCE="$2"; shift;;
     -v|--version)
       VERSION_FLAG=true;;
     *)
-      fail "Unsupported flag detected."
-      exit 1
+      fail "Unsupported flag detected: $1"
+      usage >&2
+      exit 1;;
   esac
   shift;
 done
@@ -119,6 +142,13 @@ done
 if [[ ${VERSION_FLAG} ]]; then
   echo "v${VERSION}"
   exit 0
+fi
+
+# Validate required arguments
+if [[ -z ${REPO_OWNER} || -z ${REPO_NAME} ]]; then
+  fail "Both -o/--repo-owner and -n/--repo-name are required."
+  usage >&2
+  exit 1
 fi
 
 # Get Protocol and Separator
@@ -130,8 +160,9 @@ else
   REPO_SEPARATOR="/"
 fi
 
-# URL for all git operations
+# URLs for origin (clone) and upstream remote
 FULL_CLONE_URL="${REPO_PROTOCOL}${REPO_SOURCE}${REPO_SEPARATOR}${REPO_OWNER}/${REPO_NAME}.git"
+UPSTREAM_URL="${REPO_PROTOCOL}${REPO_SOURCE}${REPO_SEPARATOR}${REPO_REMOTE_OWNER}/${REPO_NAME}.git"
 
 # Attempt clone
 clone_repo
@@ -148,8 +179,7 @@ if [[ ${ALIAS} ]]; then
   if [[ $(check_file_exists "${HOME}/.repo-aliases") != "found" ]]; then
     warn "${HOME}/.repo-aliases not found. Creating file..."
     touch "${HOME}/.repo-aliases"
-    echo "Add `source ${HOME}/.repo-aliases` to shell file"
+    echo "Add 'source ${HOME}/.repo-aliases' to shell file"
   fi
   add_repo_alias
-  source ${HOME}/.repo-aliases
 fi
